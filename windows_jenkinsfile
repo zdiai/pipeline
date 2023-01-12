@@ -1,0 +1,111 @@
+pipeline {
+    agent any
+    parameters {
+        choice(name: 'ACTION', choices: ['display', 'roll', 'newdisplay'],description: 'select Branch')
+    }
+    environment {
+        backdir = "D:\\backup"
+//设置备份目录
+        host1 = "D:\\server1"
+        host2 = "D:\\server2"
+        host3 = "D:\\server3"
+        host4 = "D:\\server4"
+        chdir = "${JENKINS_HOME}\\workspace\\${JOB_NAME}"
+//设置工作目录
+    }
+
+    stages {
+        stage("查看定义的环境变量") {
+            steps {
+                bat "echo ${env.backdir}"
+                bat "echo ${env.dir}"
+                bat "echo ${env.backdir}"
+                bat "echo ${env.workdir}"
+                bat "echo ${JOB_NAME}"
+                bat "echo ${JENKINS_HOME}"
+                bat "echo ${BUILD_URL}"
+                bat "echo ${JENKINS_HOME}\\workspace\\${JOB_NAME}"  
+                //流水线的工作目录，也就是git拉下代码的存放目录。
+
+            }
+        }
+        stage("备份原文件") {
+            when {
+                environment name: 'ACTION', value: 'display'
+        }            
+            options {
+                retry(3)
+            }
+            steps {
+                bat 'ROBOCOPY "./"  "%backdir%" /purge   /XD *.git /XF *.git *.config  *.txt /E'
+// 在更新代码前，先把本地的代码同步到备份文件一份，也可以使用线上目录作为同步源，只有选项为display的时候才会自动备份。
+            }
+        }        
+        stage("拉代码") {
+            when {
+                    environment name: 'ACTION', value: 'newdisplay'
+                }
+            steps {
+               git credentialsId: '54d099ed-0406-4b81-bf8e-bf2315a228fa', url: 'http://109.254.2.205/support-hk/support-hk.git'
+            //    第一次运行流水线时才会重新拉代码，其余均是更新代码，不涉及合并代码，线上环境为master分支。
+            }
+        }
+        stage("更新代码") {
+            when {
+                anyOf {
+                    environment name: 'ACTION', value: 'newdisplay'
+                    environment name: 'ACTION', value: 'display'                    
+                    }
+                }
+            steps {
+                bat 'git pull origin master'
+                }
+            }
+        stage("查看更新记录") {
+            steps {
+                bat 'git log'
+                // 可有可无
+            }
+        }
+    //    stage('回滚代码，准备还原') {
+    //        steps {
+    //            bat 'git reset  --hard HEAD~3'
+    //        }
+    //    }
+        stage("发布程序同步文件") {        
+                failFast true
+                parallel {
+                    stage("host1") {
+                        options {
+                           retry(3)
+                        //    同步文件时，如果失败，允许重试3此，至少需要定义两次，因为第一次同步时状态码是非零退出，虽然成功但是jenkins按失败处理。
+                             }                                              
+                        steps {
+                            bat'''
+                            if %ACTION% == roll (
+                                ROBOCOPY "%backdir%" "D:\\server1"   /purge   /XD *.git /XF *.git *.config  *.txt /E
+                            ) else (
+                                ROBOCOPY "%chdir%" "D:\\server1"   /purge   /XD *.git /XF *.git *.config  *.txt /E
+                            )
+                            '''
+                            }
+                    }
+                    stage("host2") {
+                        options {
+                           retry(3)
+                                                   //    同步文件时，如果失败，允许重试3此，至少需要定义两次，因为第一次同步时状态码是非零退出，虽然成功但是jenkins按失败处理。
+                             }                          
+                        steps {
+                            bat'''
+                            if %ACTION% == roll (
+                                ROBOCOPY "%backdir%" "D:\\server2"   /purge   /XD *.git /XF *.git *.config  *.txt /E
+                            ) else (
+                                ROBOCOPY "%chdir%" "D:\\server2"   /purge   /XD *.git /XF *.git *.config  *.txt /E
+                            )
+                            '''
+                        }
+                    }
+                }
+        }
+    }
+}
